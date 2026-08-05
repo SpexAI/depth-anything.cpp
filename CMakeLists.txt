@@ -40,6 +40,8 @@ set(GGML_VULKAN ${DA_GGML_VULKAN} CACHE BOOL "" FORCE)
 # and a GPU present at configure time, so it breaks cross/CI builds (e.g. the
 # l4t/Jetson image on CMake 3.22 yields an empty "compute_" arch). For a local
 # GPU-targeted build pass -DCMAKE_CUDA_ARCHITECTURES=native explicitly.
+find_package(TIFF REQUIRED)
+
 add_subdirectory(third_party/ggml EXCLUDE_FROM_ALL)
 
 set(DA_SOURCES
@@ -47,6 +49,8 @@ set(DA_SOURCES
     src/backend.cpp
     src/image_io.cpp
     src/preprocess.cpp
+    src/tiff_io.cpp
+    src/depth_upscale.cpp
     src/rope2d.cpp
     src/uv_posembed.cpp
     src/attention.cpp
@@ -107,6 +111,7 @@ else()
     endif()
 endif()
 target_link_libraries(depthanything PUBLIC ggml)
+target_link_libraries(depthanything PUBLIC TIFF::TIFF)
 
 # OpenMP for the single-threaded CPU geometry post-processing (surface fusion,
 # per-seam ICP, normal estimation). ggml already pulls OpenMP into the toolchain;

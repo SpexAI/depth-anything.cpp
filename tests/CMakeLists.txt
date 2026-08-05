@@ -61,6 +61,7 @@ da_add_test(test_engine_pose)
 da_add_test(test_engine_mv)
 da_add_test(test_quantize)
 da_add_test(test_quantize_accuracy)
+da_add_test(test_depth_upscale)
 
 # Standalone harness for scripts/oracle_fuse.py (takes CLI args; not a ctest).
 add_executable(fuse_dump fuse_dump.cpp)

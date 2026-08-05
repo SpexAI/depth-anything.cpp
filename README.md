@@ -25,6 +25,7 @@ Given an image it recovers a dense **metric depth** map, per-pixel **confidence*
 - **Quantization** to f16 / q8_0 / q6_k / q5_k / q4_k - q4_k is **99 MB** (0.25x the f32) and near-lossless.
 - **CPU-first, GPU-ready.** Tuned CPU path (tinyBLAS, Winograd, flash-attention) plus CUDA / Metal / Vulkan ggml backends.
 - **Flat C API** (`include/da_capi.h`) - embed from C, C++, Go, or Rust. Powers the [LocalAI](#use-it-from-localai) backend.
+- **SpexAI sensor-calibrated TIFF depth.** Run a DA2 relative-depth model on an RGB TIFF, fit it to a two-channel 16-bit sensor-depth TIFF, and emit a full-resolution uint16 TIFF.
 - **Parity-first.** Every component is gated against PyTorch-dumped reference tensors; the end-to-end depth matches the real `net()` at correlation 1.0.
 
 ---
@@ -80,6 +81,27 @@ On **GPU** (NVIDIA GB10, via `-DDA_GGML_CUDA=ON`) the ggml CUDA path with flash 
 
 ![inference speed](benchmarks/media/infer_speed.png) ![peak memory](benchmarks/media/memory.png)
 
+### SpexAI depth-upscale capacity
+
+`depth-upscale` is the SpexAI-specific capture workflow: it combines a DA2 relative-depth
+prediction from an RGB TIFF with a paired sensor TIFF. The sensor image stores each uint16
+depth sample in its first two interleaved uint8 channels (high byte, then low byte); the command
+resizes and smooths the DA2 map, polynomial-fits it to valid sensor pixels, and writes an
+uncompressed single-channel uint16 TIFF.
+
+Measured as one cold task on the supplied SpexAI captures (3072×2048 RGB → 1280×720 depth)
+with `depth-anything2-large-q4_k.gguf` (289.1 MiB), four CPU threads:
+
+| Device        | Wall time | Peak host RSS | Peak GPU memory |   Capacity guidance   |
+|---------------|----------:|--------------:|----------------:|-----------------------|
+| CPU           | 31.14 s   | 833.1 MiB     |              —  | 1 GiB RAM per worker  |
+| NVIDIA M2000M | **9.73 s**| **661.9 MiB** | 2,473 MiB task allocation; 2,806 MiB global peak (333 MiB baseline) | 1 GiB RAM + 3 GiB VRAM per worker; one worker on a 4 GiB card |
+| old SciPy     |           |    8 GiB      |                 | via triton           |
+
+The CUDA run (`-DDA_GGML_CUDA=ON`, `DA_DEVICE=CUDA0`) offloaded 403 weights and used
+flash attention. GPU memory was sampled every 100 ms; its ≈2.8 GiB global plateau persisted
+for several seconds. The CUDA output was validated as a 1280×720, single-channel uint16 TIFF.
+
 ### See it run
 
 Real photos through the actual CLI, input next to the colorized depth (turbo):
@@ -99,6 +121,8 @@ cmake -B build -DDA_BUILD_CLI=ON
 cmake --build build -j
 # -> build/examples/cli/da3-cli
 ```
+
+`depth-upscale` uses libtiff for TIFF decode/encode; install its development package before configuring (for example, `libtiff-dev` on Debian/Ubuntu).
 
 ### CMake options
 
@@ -180,6 +204,11 @@ $CLI depth --model models/depth-anything-mono-large-f32.gguf --input photo.jpg -
 
 # Nested metric-scale depth (two GGUFs)
 $CLI depth --model nested-anyview.gguf --metric-model nested-metric.gguf --input photo.jpg --pfm metric.pfm
+
+# Sensor-calibrated, full-resolution depth TIFF. The sensor input stores each
+# 16-bit depth sample in its first two 8-bit channels (high byte, low byte).
+$CLI depth-upscale --model models/depth-anything2-large-f32.gguf \
+    --input rgb_capture.tiff --sensor-depth sensor_depth.tiff --tiff calibrated_depth.tiff
 
 # Multi-view depth + pose
 $CLI depth --model $M --input a.jpg --input b.jpg --out-prefix scene

@@ -7,6 +7,8 @@
 #include "preprocess.hpp"
 #include "glb_export.hpp"
 #include "colmap_export.hpp"
+#include "depth_upscale.hpp"
+#include "tiff_io.hpp"
 #include <cstdio>
 #include <algorithm>
 #include <array>
@@ -152,6 +154,51 @@ static int cmd_depth_export(const da::cli::Parsed& p, da::Engine& eng){
     if (!p.output_png.empty()) da::write_depth_png(p.output_png, depth, H, W, p.invert);
     return 0;
 }
+static int cmd_depth_upscale(const da::cli::Parsed& p){
+    std::string error;
+    da::Image image;
+    if (!da::load_tiff_rgb(p.input, image, &error)){
+        std::fprintf(stderr, "error: load RGB TIFF failed: %s\n", error.c_str());
+        return 1;
+    }
+    std::vector<uint16_t> sensor_depth; int sensor_h = 0, sensor_w = 0;
+    if (!da::load_packed_depth_tiff(p.sensor_depth_tiff, sensor_depth, sensor_h, sensor_w, &error)){
+        std::fprintf(stderr, "error: load packed sensor depth TIFF failed: %s\n", error.c_str());
+        return 1;
+    }
+    auto eng = da::Engine::load(p.model, p.n_threads);
+    if (!eng){ std::fprintf(stderr, "error: load failed\n"); return 1; }
+    if (!eng->is_da2()){
+        std::fprintf(stderr, "error: depth-upscale requires a Depth Anything V2 GGUF\n");
+        return 1;
+    }
+    std::vector<float> predicted; int prediction_h = 0, prediction_w = 0;
+    if (!eng->depth_relative(image, predicted, prediction_h, prediction_w)){
+        std::fprintf(stderr, "error: Depth Anything V2 inference failed\n");
+        return 1;
+    }
+    std::vector<uint8_t> normalized;
+    if (!da::normalize_depth_u8(predicted, normalized, &error)){
+        std::fprintf(stderr, "error: normalize model depth failed: %s\n", error.c_str());
+        return 1;
+    }
+    da::DepthUpscaleOptions options;
+    options.degree = p.upscale_degree;
+    std::vector<uint16_t> output;
+    if (!da::upscale_depth_map(sensor_depth, sensor_h, sensor_w, normalized, prediction_h, prediction_w,
+                               output, options, &error)){
+        std::fprintf(stderr, "error: depth calibration failed: %s\n", error.c_str());
+        return 1;
+    }
+    if (!da::write_depth_tiff_u16(p.output_depth_tiff, output, sensor_h, sensor_w, &error)){
+        std::fprintf(stderr, "error: write depth TIFF failed: %s\n", error.c_str());
+        return 1;
+    }
+    std::printf("upscaled depth %dx%d from DA2 %dx%d -> %s\n", sensor_w, sensor_h, prediction_w,
+                prediction_h, p.output_depth_tiff.c_str());
+    return 0;
+}
+
 static int cmd_depth(const da::cli::Parsed& p){
     if (!p.metric_model.empty()) return cmd_depth_metric(p);
     if (p.repeat > 0 && p.inputs.size() <= 1) return cmd_depth_bench(p);
@@ -243,6 +290,7 @@ int main(int argc, char** argv){
         case S::Depth: return cmd_depth(p);
         case S::Reconstruct: return cmd_reconstruct(p);
         case S::Quantize: return cmd_quantize(p);
+        case S::DepthUpscale: return cmd_depth_upscale(p);
         case S::Help: da::cli::print_help(); return 0;
         default: da::cli::print_help(); return 1;
     }
