@@ -6,14 +6,30 @@
 
 namespace da {
 
+class Engine;
+struct Image;
+
 struct DepthUpscaleOptions {
     int degree = 2;
     float gaussian_sigma = 1.0f;
 };
 
-// Calibrates a relative Depth Anything map against packed sensor depth. The
-// predictor is resized, Gaussian-smoothed, polynomial-fitted over pixels where
-// both maps are valid, then normalized to the full uint16 output range.
+// Runs the depth-only inference path suitable for range calibration. Supports
+// DA2, DA3MONO, and the single-file DA3 DualDPT models without computing pose.
+bool predict_depth_for_upscale(Engine& engine, const Image& image,
+                               std::vector<float>& depth, int& h, int& w,
+                               std::string* error = nullptr);
+
+// Calibrates a Depth Anything map against projected sensor ranges. The
+// predictor is normalized, resized, Gaussian-smoothed, and polynomial-fitted
+// over pixels where sensor samples exist. Output remains calibrated uint16
+// sensor units (normally millimetres); it is not stretched to the full range.
+bool upscale_depth_map(const std::vector<uint16_t>& sensor_depth, int sensor_h, int sensor_w,
+                       const std::vector<float>& relative_depth, int relative_h, int relative_w,
+                       std::vector<uint16_t>& output, const DepthUpscaleOptions& options = {},
+                       std::string* error = nullptr);
+
+// Compatibility overload for the former normalized-uint8 service boundary.
 bool upscale_depth_map(const std::vector<uint16_t>& sensor_depth, int sensor_h, int sensor_w,
                        const std::vector<uint8_t>& relative_depth, int relative_h, int relative_w,
                        std::vector<uint16_t>& output, const DepthUpscaleOptions& options = {},
