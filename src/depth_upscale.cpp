@@ -1,8 +1,9 @@
 #include "depth_upscale.hpp"
+#include "engine.hpp"
+#include "image_io.hpp"
 
 #include <algorithm>
 #include <cmath>
-#include <limits>
 
 namespace da {
 namespace {
@@ -22,7 +23,7 @@ int reflect_index(int index, int size) {
     return index;
 }
 
-std::vector<float> resize_bilinear_reflect(const std::vector<uint8_t>& image, int in_h, int in_w,
+std::vector<float> resize_bilinear_reflect(const std::vector<float>& image, int in_h, int in_w,
                                            int out_h, int out_w) {
     std::vector<float> out(static_cast<size_t>(out_h) * out_w);
     for (int y = 0; y < out_h; ++y) {
@@ -119,6 +120,30 @@ bool solve_linear_system(std::vector<double>& matrix, std::vector<double>& rhs, 
 
 } // namespace
 
+bool predict_depth_for_upscale(Engine& engine, const Image& image,
+                               std::vector<float>& depth, int& h, int& w,
+                               std::string* error) {
+    if (engine.is_nested()) {
+        set_error(error, "two-file nested DA3 models are not supported for range upscaling");
+        return false;
+    }
+    if (engine.is_da2()) {
+        if (engine.depth_relative(image, depth, h, w)) return true;
+        set_error(error, "Depth Anything V2 inference failed");
+        return false;
+    }
+    if (engine.is_mono()) {
+        std::vector<float> sky;
+        if (engine.depth_mono(image, depth, sky, h, w)) return true;
+        set_error(error, "Depth Anything V3 mono inference failed");
+        return false;
+    }
+    std::vector<float> confidence;
+    if (engine.depth_native_image(image, depth, confidence, h, w)) return true;
+    set_error(error, "Depth Anything V3 inference failed");
+    return false;
+}
+
 bool normalize_depth_u8(const std::vector<float>& depth, std::vector<uint8_t>& normalized,
                         std::string* error) {
     if (depth.empty()) {
@@ -138,22 +163,44 @@ bool normalize_depth_u8(const std::vector<float>& depth, std::vector<uint8_t>& n
     return true;
 }
 
-bool upscale_depth_map(const std::vector<uint16_t>& sensor_depth, int sensor_h, int sensor_w,
-                       const std::vector<uint8_t>& relative_depth, int relative_h, int relative_w,
-                       std::vector<uint16_t>& output, const DepthUpscaleOptions& options,
-                       std::string* error) {
+static bool upscale_depth_map_impl(const std::vector<uint16_t>& sensor_depth, int sensor_h, int sensor_w,
+                                   const std::vector<float>& relative_depth, int relative_h, int relative_w,
+                                   std::vector<uint16_t>& output, const DepthUpscaleOptions& options,
+                                   bool normalize_relative, std::string* error) {
     if (!valid_shape(sensor_depth.size(), sensor_h, sensor_w) ||
         !valid_shape(relative_depth.size(), relative_h, relative_w)) {
         set_error(error, "depth dimensions do not match pixel counts");
         return false;
     }
     if (options.degree < 0 || options.degree > 8 || !std::isfinite(options.gaussian_sigma) ||
-        options.gaussian_sigma < 0.0f) {
+        options.gaussian_sigma < 0.0f || options.gaussian_sigma > kMaxDepthUpscaleGaussianSigma) {
         set_error(error, "invalid polynomial degree or Gaussian sigma");
         return false;
     }
 
-    std::vector<float> predictor = resize_bilinear_reflect(relative_depth, relative_h, relative_w, sensor_h, sensor_w);
+    std::vector<float> normalized(relative_depth.size());
+    if (normalize_relative) {
+        auto relative_range = std::minmax_element(relative_depth.begin(), relative_depth.end());
+        if (!std::isfinite(*relative_range.first) || !std::isfinite(*relative_range.second) ||
+            *relative_range.first >= *relative_range.second) {
+            set_error(error, "model depth must contain a finite non-constant range");
+            return false;
+        }
+        const float relative_scale = 1.0f / (*relative_range.second - *relative_range.first);
+        for (size_t i = 0; i < relative_depth.size(); ++i) {
+            if (!std::isfinite(relative_depth[i])) {
+                set_error(error, "model depth must be finite");
+                return false;
+            }
+            normalized[i] = std::clamp((relative_depth[i] - *relative_range.first) * relative_scale,
+                                       0.0f, 1.0f);
+        }
+    } else {
+        normalized = relative_depth;
+    }
+
+    std::vector<float> predictor = resize_bilinear_reflect(normalized, relative_h, relative_w,
+                                                           sensor_h, sensor_w);
     gaussian_blur_reflect(predictor, sensor_h, sensor_w, options.gaussian_sigma);
     const float predictor_max = *std::max_element(predictor.begin(), predictor.end());
     const uint16_t sensor_max = *std::max_element(sensor_depth.begin(), sensor_depth.end());
@@ -185,33 +232,33 @@ bool upscale_depth_map(const std::vector<uint16_t>& sensor_depth, int sensor_h, 
         return false;
     }
 
-    // The original workflow clips to uint16 before its final full-range
-    // normalization. Preserve that order so the TIFF spans exactly [0, 65535].
-    std::vector<uint16_t> scaled(predictor.size());
-    uint16_t output_min = std::numeric_limits<uint16_t>::max();
-    uint16_t output_max = 0;
+    output.resize(predictor.size());
     for (size_t i = 0; i < predictor.size(); ++i) {
         const double x = predictor[i] / predictor_max;
         double value = 0.0;
         for (int coefficient = coefficient_count - 1; coefficient >= 0; --coefficient) {
             value = value * x + rhs[coefficient];
         }
-        const uint16_t clipped = static_cast<uint16_t>(std::clamp(value, 0.0, 65535.0));
-        scaled[i] = clipped;
-        output_min = std::min(output_min, clipped);
-        output_max = std::max(output_max, clipped);
-    }
-    if (output_min >= output_max) {
-        set_error(error, "polynomial fit produced a constant or invalid depth map");
-        return false;
-    }
-
-    const double normalization = 65535.0 / (output_max - output_min);
-    output.resize(scaled.size());
-    for (size_t i = 0; i < scaled.size(); ++i) {
-        output[i] = static_cast<uint16_t>(std::clamp((scaled[i] - output_min) * normalization, 0.0, 65535.0));
+        output[i] = static_cast<uint16_t>(std::lround(std::clamp(value, 0.0, 65535.0)));
     }
     return true;
+}
+
+bool upscale_depth_map(const std::vector<uint16_t>& sensor_depth, int sensor_h, int sensor_w,
+                       const std::vector<float>& relative_depth, int relative_h, int relative_w,
+                       std::vector<uint16_t>& output, const DepthUpscaleOptions& options,
+                       std::string* error) {
+    return upscale_depth_map_impl(sensor_depth, sensor_h, sensor_w, relative_depth, relative_h, relative_w,
+                                  output, options, true, error);
+}
+
+bool upscale_depth_map(const std::vector<uint16_t>& sensor_depth, int sensor_h, int sensor_w,
+                       const std::vector<uint8_t>& relative_depth, int relative_h, int relative_w,
+                       std::vector<uint16_t>& output, const DepthUpscaleOptions& options,
+                       std::string* error) {
+    std::vector<float> converted(relative_depth.begin(), relative_depth.end());
+    return upscale_depth_map_impl(sensor_depth, sensor_h, sensor_w, converted, relative_h, relative_w,
+                                  output, options, false, error);
 }
 
 } // namespace da

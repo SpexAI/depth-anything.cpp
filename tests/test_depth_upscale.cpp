@@ -1,5 +1,6 @@
 #include "depth_upscale.hpp"
 #include "tiff_io.hpp"
+#include "da_capi.h"
 
 #include <tiffio.h>
 #include <cstdio>
@@ -63,17 +64,23 @@ static bool write_rgb_fixture(const std::string& path) {
 }
 int main() {
 
+    check(da_capi_abi_version() == 12, "reports C API version 12");
+    uint16_t one = 1;
+    check(da_capi_depth_upscale(nullptr, "missing.tiff", &one, 1, 1, 2, 1.0f, &one) == -1,
+          "C API rejects a null context");
+
     std::vector<uint8_t> normalized;
     std::string error;
     check(normalize_depth_u8({-2.0f, 0.0f, 2.0f}, normalized, &error), "normalizes finite model depth");
     check(normalized == std::vector<uint8_t>({0, 127, 255}), "normalization matches uint8 truncation semantics");
     check(!normalize_depth_u8({1.0f, 1.0f}, normalized, &error), "rejects constant model depth");
 
+
     constexpr int h = 4, w = 5;
-    std::vector<uint8_t> relative(h * w);
+    std::vector<float> relative(h * w);
     std::vector<uint16_t> sensor(h * w);
     for (int i = 0; i < h * w; ++i) {
-        relative[i] = static_cast<uint8_t>(i + 1);
+        relative[i] = static_cast<float>(i + 1);
         sensor[i] = static_cast<uint16_t>(1000 + 200 * relative[i]);
     }
     DepthUpscaleOptions options;
@@ -81,12 +88,23 @@ int main() {
     options.gaussian_sigma = 0.0f;
     std::vector<uint16_t> output;
     check(upscale_depth_map(sensor, h, w, relative, h, w, output, options, &error), "fits linear overlapping depth");
-    check(output.front() == 0 && output.back() == 65535, "normalizes calibrated map to full uint16 range");
+    check(output.front() == sensor.front() && output.back() == sensor.back(),
+          "preserves calibrated sensor units without full-range stretching");
     bool monotonic = true;
     for (size_t i = 1; i < output.size(); ++i) monotonic = monotonic && output[i - 1] <= output[i];
     check(monotonic, "preserves relative-depth ordering after calibration");
-    check(!upscale_depth_map(sensor, h, w, std::vector<uint8_t>(h * w, 1), h, w, output, options, &error),
+    check(!upscale_depth_map(sensor, h, w, std::vector<float>(h * w, 1), h, w, output, options, &error),
           "rejects degenerate predictor");
+    // The uint8 compatibility overload must retain the supplied nonzero range:
+    // normalizing it first would turn 10 into zero and leave only three samples
+    // for this cubic fit.
+    std::vector<uint16_t> legacy_sensor {1000, 2000, 3000, 4000};
+    std::vector<uint8_t> legacy_relative {10, 20, 30, 40};
+    std::vector<uint16_t> legacy_output;
+    options.degree = 3;
+    check(upscale_depth_map(legacy_sensor, 2, 2, legacy_relative, 2, 2, legacy_output, options, &error),
+          "preserves legacy uint8 predictor values during calibration");
+    options.degree = 1;
 
     const std::string packed_path = temporary_path("-packed.tiff");
     const std::string output_path = temporary_path("-output.tiff");

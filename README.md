@@ -25,7 +25,7 @@ Given an image it recovers a dense **metric depth** map, per-pixel **confidence*
 - **Quantization** to f16 / q8_0 / q6_k / q5_k / q4_k - q4_k is **99 MB** (0.25x the f32) and near-lossless.
 - **CPU-first, GPU-ready.** Tuned CPU path (tinyBLAS, Winograd, flash-attention) plus CUDA / Metal / Vulkan ggml backends.
 - **Flat C API** (`include/da_capi.h`) - embed from C, C++, Go, or Rust. Powers the [LocalAI](#use-it-from-localai) backend.
-- **SpexAI sensor-calibrated TIFF depth.** Run a DA2 relative-depth model on an RGB TIFF, fit it to a two-channel 16-bit sensor-depth TIFF, and emit a full-resolution uint16 TIFF.
+- **SpexAI sensor-calibrated depth.** Run DA2 or single-file DA3 on a main-camera image, fit it to projected sensor ranges, and emit calibrated uint16 millimetres.
 - **Parity-first.** Every component is gated against PyTorch-dumped reference tensors; the end-to-end depth matches the real `net()` at correlation 1.0.
 
 ---
@@ -83,11 +83,13 @@ On **GPU** (NVIDIA GB10, via `-DDA_GGML_CUDA=ON`) the ggml CUDA path with flash 
 
 ### SpexAI depth-upscale capacity
 
-`depth-upscale` is the SpexAI-specific capture workflow: it combines a DA2 relative-depth
-prediction from an RGB TIFF with a paired sensor TIFF. The sensor image stores each uint16
+`depth-upscale` is the SpexAI-specific capture workflow: it combines a DA2 or single-file
+DA3 prediction from an RGB TIFF with a paired sensor TIFF. The sensor image stores each uint16
 depth sample in its first two interleaved uint8 channels (high byte, then low byte); the command
-resizes and smooths the DA2 map, polynomial-fits it to valid sensor pixels, and writes an
-uncompressed single-channel uint16 TIFF.
+resizes and smooths the model map, polynomial-fits it to valid sensor pixels, and writes an
+uncompressed single-channel uint16 TIFF in calibrated sensor units. The library API also accepts
+a sparse range image already projected into the main camera by PointClouds, preserving its
+millimetre scale rather than stretching each result to 0..65535.
 
 Measured as one cold task on the supplied SpexAI captures (3072×2048 RGB → 1280×720 depth)
 with `depth-anything2-large-q4_k.gguf` (289.1 MiB), four CPU threads:
@@ -166,6 +168,12 @@ python scripts/convert_nested_to_gguf.py --model models/DA3NESTED-GIANT-LARGE --
 python scripts/convert_da2_to_gguf.py --encoder vitl --ckpt models/depth_anything_v2_vitl.pth \
     --output models/depth-anything2-large-f32.gguf --name Depth-Anything-V2-Large
 
+# Legacy depth-upscale model: yuvraj108c's static ViT-B ONNX export.
+# This writes the depth-upscale default and needs only onnx, numpy, and gguf.
+python scripts/convert_da2_onnx_to_gguf.py \
+    --onnx ../depth-upscale/models/depth_anything_v2/1/model.onnx \
+    --output models/depth-anything2-base-f32.gguf
+
 # Depth Anything V2 — metric (add --max-depth: 20 for Hypersim/indoor, 80 for VKITTI/outdoor)
 python scripts/convert_da2_to_gguf.py --encoder vits --ckpt models/depth_anything_v2_metric_hypersim_vits.pth \
     --output models/depth-anything2-metric-hypersim-small-f32.gguf \
@@ -205,10 +213,11 @@ $CLI depth --model models/depth-anything-mono-large-f32.gguf --input photo.jpg -
 # Nested metric-scale depth (two GGUFs)
 $CLI depth --model nested-anyview.gguf --metric-model nested-metric.gguf --input photo.jpg --pfm metric.pfm
 
-# Sensor-calibrated, full-resolution depth TIFF. The sensor input stores each
-# 16-bit depth sample in its first two 8-bit channels (high byte, low byte).
-$CLI depth-upscale --model models/depth-anything2-large-f32.gguf \
-    --input rgb_capture.tiff --sensor-depth sensor_depth.tiff --tiff calibrated_depth.tiff
+# Sensor-calibrated DA2/DA3 depth TIFF. depth-upscale defaults to the converted
+# yuvraj108c Depth Anything V2 ViT-B model at models/depth-anything2-base-f32.gguf.
+# The sensor input stores each 16-bit depth sample in its first two 8-bit channels
+# (high byte, low byte); pass --model to override the default.
+$CLI depth-upscale --input rgb_capture.tiff --sensor-depth sensor_depth.tiff --tiff calibrated_depth.tiff
 
 # Multi-view depth + pose
 $CLI depth --model $M --input a.jpg --input b.jpg --out-prefix scene
@@ -249,7 +258,7 @@ Gallery entries cover base (q4_k/q8_0/f16/f32), small, large, giant, and mono-la
 
 ## C API
 
-A flat C ABI (`include/da_capi.h`, `abi_version` 4) over `libdepthanything.so`:
+A flat C ABI (`include/da_capi.h`, `abi_version` 12) over `libdepthanything.so`:
 
 ```c
 da_ctx* ctx = da_capi_load("model.gguf", /*threads*/ 8);
@@ -263,6 +272,11 @@ da_capi_free_floats(depth);
 int n; float *xyz; unsigned char *rgb;
 da_capi_points(ctx, "photo.jpg", /*conf_thresh*/ 1.0f, &n, &xyz, &rgb);   // 3D cloud
 da_capi_export_glb(ctx, "photo.jpg", "scene.glb");
+
+// PCL projects sensor points into the main-camera grid first. The result and
+// output are caller-owned uint16 millimetre buffers of size range_h*range_w.
+da_capi_depth_upscale(ctx, "main.tiff", projected_range_mm, range_h, range_w,
+                      /*degree*/ 2, /*gaussian_sigma*/ 1.0f, dense_range_mm);
 da_capi_free(ctx);
 ```
 
