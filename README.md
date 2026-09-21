@@ -168,6 +168,12 @@ python scripts/convert_nested_to_gguf.py --model models/DA3NESTED-GIANT-LARGE --
 python scripts/convert_da2_to_gguf.py --encoder vitl --ckpt models/depth_anything_v2_vitl.pth \
     --output models/depth-anything2-large-f32.gguf --name Depth-Anything-V2-Large
 
+# Legacy depth-upscale model: yuvraj108c's static ViT-B ONNX export.
+# This writes the depth-upscale default and needs only onnx, numpy, and gguf.
+python scripts/convert_da2_onnx_to_gguf.py \
+    --onnx ../depth-upscale/models/depth_anything_v2/1/model.onnx \
+    --output models/depth-anything2-base-f32.gguf
+
 # Depth Anything V2 — metric (add --max-depth: 20 for Hypersim/indoor, 80 for VKITTI/outdoor)
 python scripts/convert_da2_to_gguf.py --encoder vits --ckpt models/depth_anything_v2_metric_hypersim_vits.pth \
     --output models/depth-anything2-metric-hypersim-small-f32.gguf \
@@ -207,10 +213,11 @@ $CLI depth --model models/depth-anything-mono-large-f32.gguf --input photo.jpg -
 # Nested metric-scale depth (two GGUFs)
 $CLI depth --model nested-anyview.gguf --metric-model nested-metric.gguf --input photo.jpg --pfm metric.pfm
 
-# Sensor-calibrated DA2/DA3 depth TIFF. The sensor input stores each
-# 16-bit depth sample in its first two 8-bit channels (high byte, low byte).
-$CLI depth-upscale --model models/depth-anything2-large-f32.gguf \
-    --input rgb_capture.tiff --sensor-depth sensor_depth.tiff --tiff calibrated_depth.tiff
+# Sensor-calibrated DA2/DA3 depth TIFF. depth-upscale defaults to the converted
+# yuvraj108c Depth Anything V2 ViT-B model at models/depth-anything2-base-f32.gguf.
+# The sensor input stores each 16-bit depth sample in its first two 8-bit channels
+# (high byte, low byte); pass --model to override the default.
+$CLI depth-upscale --input rgb_capture.tiff --sensor-depth sensor_depth.tiff --tiff calibrated_depth.tiff
 
 # Multi-view depth + pose
 $CLI depth --model $M --input a.jpg --input b.jpg --out-prefix scene
