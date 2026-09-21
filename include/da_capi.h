@@ -47,8 +47,9 @@ void        da_capi_free_string(char* s);
 const char* da_capi_last_error(da_ctx* ctx);                     /* owned by ctx, "" if none */
 /* Infer DA2 or single-file DA3 depth for image_path and calibrate it against a
    sparse projected range image. projected_range_mm and out_range_mm are caller-
-   owned [range_h*range_w] buffers. The output remains in calibrated millimetres;
-   it is not normalized to the full uint16 range. Returns 0 or -1 on error. */
+   owned [range_h*range_w] buffers. gaussian_sigma must be finite in [0, 64].
+   The output remains in calibrated millimetres; it is not normalized to the full
+   uint16 range. Returns 0 or -1 on error. */
 int da_capi_depth_upscale(da_ctx* ctx, const char* image_path,
                           const uint16_t* projected_range_mm, int range_h, int range_w,
                           int polynomial_degree, float gaussian_sigma,

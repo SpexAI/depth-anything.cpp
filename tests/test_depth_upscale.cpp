@@ -75,6 +75,7 @@ int main() {
     check(normalized == std::vector<uint8_t>({0, 127, 255}), "normalization matches uint8 truncation semantics");
     check(!normalize_depth_u8({1.0f, 1.0f}, normalized, &error), "rejects constant model depth");
 
+
     constexpr int h = 4, w = 5;
     std::vector<float> relative(h * w);
     std::vector<uint16_t> sensor(h * w);
@@ -94,6 +95,16 @@ int main() {
     check(monotonic, "preserves relative-depth ordering after calibration");
     check(!upscale_depth_map(sensor, h, w, std::vector<float>(h * w, 1), h, w, output, options, &error),
           "rejects degenerate predictor");
+    // The uint8 compatibility overload must retain the supplied nonzero range:
+    // normalizing it first would turn 10 into zero and leave only three samples
+    // for this cubic fit.
+    std::vector<uint16_t> legacy_sensor {1000, 2000, 3000, 4000};
+    std::vector<uint8_t> legacy_relative {10, 20, 30, 40};
+    std::vector<uint16_t> legacy_output;
+    options.degree = 3;
+    check(upscale_depth_map(legacy_sensor, 2, 2, legacy_relative, 2, 2, legacy_output, options, &error),
+          "preserves legacy uint8 predictor values during calibration");
+    options.degree = 1;
 
     const std::string packed_path = temporary_path("-packed.tiff");
     const std::string output_path = temporary_path("-output.tiff");

@@ -8,6 +8,8 @@ namespace da {
 
 class Engine;
 struct Image;
+inline constexpr float kMaxDepthUpscaleGaussianSigma = 64.0f;
+
 
 struct DepthUpscaleOptions {
     int degree = 2;

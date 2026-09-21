@@ -19,6 +19,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <string>
+#include <new>
 #include <array>
 #include <utility>
 #include <vector>
@@ -140,38 +141,48 @@ int da_capi_depth_upscale(da_ctx* c, const char* image_path,
         if (c) c->last_error = "depth_upscale: bad args";
         return -1;
     }
-    da::Image image;
-    std::string path(image_path), error;
-    std::string lower = path;
-    for (char& ch : lower) ch = (char)std::tolower((unsigned char)ch);
-    const bool is_tiff = lower.size() >= 4 &&
-        (lower.compare(lower.size() - 4, 4, ".tif") == 0 ||
-         (lower.size() >= 5 && lower.compare(lower.size() - 5, 5, ".tiff") == 0));
-    if (is_tiff ? !da::load_tiff_rgb(path, image, &error) : !da::load_image_rgb(path, image)){
-        c->last_error = "depth_upscale: load image failed";
-        if (!error.empty()) c->last_error += ": " + error;
+    if (!std::isfinite(gaussian_sigma) || gaussian_sigma < 0.0f ||
+        gaussian_sigma > da::kMaxDepthUpscaleGaussianSigma) {
+        c->last_error = "depth_upscale: invalid Gaussian sigma";
         return -1;
     }
-    std::vector<float> predicted;
-    int prediction_h = 0, prediction_w = 0;
-    if (!da::predict_depth_for_upscale(*c->engine, image, predicted,
-                                       prediction_h, prediction_w, &error)){
-        c->last_error = "depth_upscale: " + error;
+    try {
+        da::Image image;
+        std::string path(image_path), error;
+        std::string lower = path;
+        for (char& ch : lower) ch = (char)std::tolower((unsigned char)ch);
+        const bool is_tiff = lower.size() >= 4 &&
+            (lower.compare(lower.size() - 4, 4, ".tif") == 0 ||
+             (lower.size() >= 5 && lower.compare(lower.size() - 5, 5, ".tiff") == 0));
+        if (is_tiff ? !da::load_tiff_rgb(path, image, &error) : !da::load_image_rgb(path, image)){
+            c->last_error = "depth_upscale: load image failed";
+            if (!error.empty()) c->last_error += ": " + error;
+            return -1;
+        }
+        std::vector<float> predicted;
+        int prediction_h = 0, prediction_w = 0;
+        if (!da::predict_depth_for_upscale(*c->engine, image, predicted,
+                                           prediction_h, prediction_w, &error)){
+            c->last_error = "depth_upscale: " + error;
+            return -1;
+        }
+        const size_t count = (size_t)range_h * (size_t)range_w;
+        std::vector<uint16_t> projected(projected_range_mm, projected_range_mm + count), output;
+        da::DepthUpscaleOptions options;
+        options.degree = polynomial_degree;
+        options.gaussian_sigma = gaussian_sigma;
+        if (!da::upscale_depth_map(projected, range_h, range_w, predicted,
+                                   prediction_h, prediction_w, output, options, &error)){
+            c->last_error = "depth_upscale: " + error;
+            return -1;
+        }
+        std::memcpy(out_range_mm, output.data(), count * sizeof(uint16_t));
+        c->last_error.clear();
+        return 0;
+    } catch (const std::bad_alloc&) {
+        c->last_error = "depth_upscale: allocation failed";
         return -1;
     }
-    const size_t count = (size_t)range_h * (size_t)range_w;
-    std::vector<uint16_t> projected(projected_range_mm, projected_range_mm + count), output;
-    da::DepthUpscaleOptions options;
-    options.degree = polynomial_degree;
-    options.gaussian_sigma = gaussian_sigma;
-    if (!da::upscale_depth_map(projected, range_h, range_w, predicted,
-                               prediction_h, prediction_w, output, options, &error)){
-        c->last_error = "depth_upscale: " + error;
-        return -1;
-    }
-    std::memcpy(out_range_mm, output.data(), count * sizeof(uint16_t));
-    c->last_error.clear();
-    return 0;
 }
 float* da_capi_depth_path(da_ctx* c, const char* image_path, int* out_h, int* out_w){
     if (!c || !c->engine || !image_path){ if (c) c->last_error = "depth: bad args"; return nullptr; }

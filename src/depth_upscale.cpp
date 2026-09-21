@@ -163,36 +163,40 @@ bool normalize_depth_u8(const std::vector<float>& depth, std::vector<uint8_t>& n
     return true;
 }
 
-bool upscale_depth_map(const std::vector<uint16_t>& sensor_depth, int sensor_h, int sensor_w,
-                       const std::vector<float>& relative_depth, int relative_h, int relative_w,
-                       std::vector<uint16_t>& output, const DepthUpscaleOptions& options,
-                       std::string* error) {
+static bool upscale_depth_map_impl(const std::vector<uint16_t>& sensor_depth, int sensor_h, int sensor_w,
+                                   const std::vector<float>& relative_depth, int relative_h, int relative_w,
+                                   std::vector<uint16_t>& output, const DepthUpscaleOptions& options,
+                                   bool normalize_relative, std::string* error) {
     if (!valid_shape(sensor_depth.size(), sensor_h, sensor_w) ||
         !valid_shape(relative_depth.size(), relative_h, relative_w)) {
         set_error(error, "depth dimensions do not match pixel counts");
         return false;
     }
     if (options.degree < 0 || options.degree > 8 || !std::isfinite(options.gaussian_sigma) ||
-        options.gaussian_sigma < 0.0f) {
+        options.gaussian_sigma < 0.0f || options.gaussian_sigma > kMaxDepthUpscaleGaussianSigma) {
         set_error(error, "invalid polynomial degree or Gaussian sigma");
         return false;
     }
 
-    auto relative_range = std::minmax_element(relative_depth.begin(), relative_depth.end());
-    if (!std::isfinite(*relative_range.first) || !std::isfinite(*relative_range.second) ||
-        *relative_range.first >= *relative_range.second) {
-        set_error(error, "model depth must contain a finite non-constant range");
-        return false;
-    }
-    const float relative_scale = 1.0f / (*relative_range.second - *relative_range.first);
     std::vector<float> normalized(relative_depth.size());
-    for (size_t i = 0; i < relative_depth.size(); ++i) {
-        if (!std::isfinite(relative_depth[i])) {
-            set_error(error, "model depth must be finite");
+    if (normalize_relative) {
+        auto relative_range = std::minmax_element(relative_depth.begin(), relative_depth.end());
+        if (!std::isfinite(*relative_range.first) || !std::isfinite(*relative_range.second) ||
+            *relative_range.first >= *relative_range.second) {
+            set_error(error, "model depth must contain a finite non-constant range");
             return false;
         }
-        normalized[i] = std::clamp((relative_depth[i] - *relative_range.first) * relative_scale,
-                                   0.0f, 1.0f);
+        const float relative_scale = 1.0f / (*relative_range.second - *relative_range.first);
+        for (size_t i = 0; i < relative_depth.size(); ++i) {
+            if (!std::isfinite(relative_depth[i])) {
+                set_error(error, "model depth must be finite");
+                return false;
+            }
+            normalized[i] = std::clamp((relative_depth[i] - *relative_range.first) * relative_scale,
+                                       0.0f, 1.0f);
+        }
+    } else {
+        normalized = relative_depth;
     }
 
     std::vector<float> predictor = resize_bilinear_reflect(normalized, relative_h, relative_w,
@@ -241,12 +245,20 @@ bool upscale_depth_map(const std::vector<uint16_t>& sensor_depth, int sensor_h, 
 }
 
 bool upscale_depth_map(const std::vector<uint16_t>& sensor_depth, int sensor_h, int sensor_w,
+                       const std::vector<float>& relative_depth, int relative_h, int relative_w,
+                       std::vector<uint16_t>& output, const DepthUpscaleOptions& options,
+                       std::string* error) {
+    return upscale_depth_map_impl(sensor_depth, sensor_h, sensor_w, relative_depth, relative_h, relative_w,
+                                  output, options, true, error);
+}
+
+bool upscale_depth_map(const std::vector<uint16_t>& sensor_depth, int sensor_h, int sensor_w,
                        const std::vector<uint8_t>& relative_depth, int relative_h, int relative_w,
                        std::vector<uint16_t>& output, const DepthUpscaleOptions& options,
                        std::string* error) {
     std::vector<float> converted(relative_depth.begin(), relative_depth.end());
-    return upscale_depth_map(sensor_depth, sensor_h, sensor_w, converted, relative_h, relative_w,
-                             output, options, error);
+    return upscale_depth_map_impl(sensor_depth, sensor_h, sensor_w, converted, relative_h, relative_w,
+                                  output, options, false, error);
 }
 
 } // namespace da
