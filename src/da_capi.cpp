@@ -41,6 +41,15 @@ struct da_ctx {
     std::vector<uint8_t> temporal_voxel_mesh;
 };
 
+static void capi_set_error(da_ctx* c, const char* message) noexcept {
+    if (!c) return;
+    try {
+        c->last_error = message;
+    } catch (...) {
+        c->last_error.clear();
+    }
+}
+
 static char* dup_cstr(const std::string& s){
     char* p = (char*)std::malloc(s.size()+1);
     if (p) std::memcpy(p, s.c_str(), s.size()+1);
@@ -138,12 +147,13 @@ int da_capi_depth_upscale(da_ctx* c, const char* image_path,
                           uint16_t* out_range_mm){
     if (!c || !c->engine || !image_path || !projected_range_mm || !out_range_mm ||
         range_h <= 0 || range_w <= 0){
-        if (c) c->last_error = "depth_upscale: bad args";
+        capi_set_error(c, "depth_upscale: bad args");
         return -1;
     }
-    if (!std::isfinite(gaussian_sigma) || gaussian_sigma < 0.0f ||
+    if (polynomial_degree < 0 || polynomial_degree > 8 ||
+        !std::isfinite(gaussian_sigma) || gaussian_sigma < 0.0f ||
         gaussian_sigma > da::kMaxDepthUpscaleGaussianSigma) {
-        c->last_error = "depth_upscale: invalid Gaussian sigma";
+        capi_set_error(c, "depth_upscale: invalid polynomial degree or Gaussian sigma");
         return -1;
     }
     try {
@@ -180,7 +190,10 @@ int da_capi_depth_upscale(da_ctx* c, const char* image_path,
         c->last_error.clear();
         return 0;
     } catch (const std::bad_alloc&) {
-        c->last_error = "depth_upscale: allocation failed";
+        capi_set_error(c, "depth_upscale: allocation failed");
+        return -1;
+    } catch (...) {
+        capi_set_error(c, "depth_upscale: failed");
         return -1;
     }
 }

@@ -33,14 +33,16 @@ int main(){
     uint16_t upscaled[16] = {};
     const int invalid_sigma = da_capi_depth_upscale(
         c, png, projected_range, 4, 4, 1, std::numeric_limits<float>::max(), upscaled);
+    const int invalid_degree = da_capi_depth_upscale(
+        c, png, projected_range, 4, 4, 9, 0.0f, upscaled);
     const int invalid_image = da_capi_depth_upscale(
         c, "missing-image.jpg", projected_range, 4, 4, 1, 0.0f, upscaled);
     const int upscale = da_capi_depth_upscale(
         c, png, projected_range, 4, 4, 1, 0.0f, upscaled);
-    bool upscale_ok = invalid_sigma == -1 && invalid_image == -1 && upscale == 0;
+    bool upscale_ok = invalid_sigma == -1 && invalid_degree == -1 && invalid_image == -1 && upscale == 0;
     for (uint16_t value : upscaled) upscale_ok = upscale_ok && value > 0;
-    std::fprintf(stderr, "da2 upscale: invalid_sigma=%d invalid_image=%d result=%d -> %s\n",
-                 invalid_sigma, invalid_image, upscale, upscale_ok ? "OK" : "FAIL");
+    std::fprintf(stderr, "da2 upscale: invalid_sigma=%d invalid_degree=%d invalid_image=%d result=%d -> %s\n",
+                 invalid_sigma, invalid_degree, invalid_image, upscale, upscale_ok ? "OK" : "FAIL");
 
 
     int H=0, W=0, is_metric=-1; float *depth=nullptr, *conf=nullptr, *sky=nullptr;
