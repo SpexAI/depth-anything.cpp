@@ -67,7 +67,7 @@ Parsed parse(int argc, char** argv){
             else if (a == "--threads" && i+1<argc){ r.n_threads = std::atoi(argv[++i]); }
             else { r.error = "unknown flag: " + a; return r; }
         }
-        if (r.model.empty()) r.model = "models/depth-anything2-base-f32.gguf";
+        if (r.model.empty()) r.model = "models/depth-anything-base-f32.gguf";
         if (r.input.empty()) r.error = "depth-upscale: --input required";
         else if (r.sensor_depth_tiff.empty()) r.error = "depth-upscale: --sensor-depth required";
         else if (r.output_depth_tiff.empty()) r.error = "depth-upscale: --tiff required";

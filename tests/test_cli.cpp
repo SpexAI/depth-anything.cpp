@@ -22,9 +22,8 @@ int main() {
     auto defaults = parse({"da3-cli", "depth-upscale", "--input", "rgb.tiff",
                            "--sensor-depth", "sensor.tiff", "--tiff", "depth.tiff"});
     check(defaults.error.empty(), "depth-upscale accepts required arguments without --model");
-    check(defaults.model == "models/depth-anything2-base-f32.gguf",
-          "depth-upscale uses the converted DA2 ONNX model by default");
-
+    check(defaults.model == "models/depth-anything-base-f32.gguf",
+          "depth-upscale uses the DA3_BASE f32 model by default");
     auto explicit_model = parse({"da3-cli", "depth-upscale", "--model", "custom.gguf",
                                  "--input", "rgb.tiff", "--sensor-depth", "sensor.tiff",
                                  "--tiff", "depth.tiff"});

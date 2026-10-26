@@ -170,7 +170,8 @@ python scripts/convert_da2_to_gguf.py --encoder vitl --ckpt models/depth_anythin
     --output models/depth-anything2-large-f32.gguf --name Depth-Anything-V2-Large
 
 # Legacy depth-upscale model: yuvraj108c's static ViT-B ONNX export.
-# This writes the depth-upscale default and needs only onnx, numpy, and gguf.
+# Optional DA2 alternative; pass --model to depth-upscale to use it.
+# Conversion needs only onnx, numpy, and gguf.
 python scripts/convert_da2_onnx_to_gguf.py \
     --onnx ../depth-upscale/models/depth_anything_v2/1/model.onnx \
     --output models/depth-anything2-base-f32.gguf
@@ -215,8 +216,7 @@ $CLI depth --model models/depth-anything-mono-large-f32.gguf --input photo.jpg -
 $CLI depth --model nested-anyview.gguf --metric-model nested-metric.gguf --input photo.jpg --pfm metric.pfm
 
 # Sensor-calibrated DA2/DA3 depth TIFF (build with -DDA_ENABLE_TIFF=ON).
-# depth-upscale defaults to the converted
-# yuvraj108c Depth Anything V2 ViT-B model at models/depth-anything2-base-f32.gguf.
+# depth-upscale defaults to DA3-BASE (F32) at models/depth-anything-base-f32.gguf.
 # The sensor input stores each 16-bit depth sample in its first two 8-bit channels
 # (high byte, low byte); pass --model to override the default.
 $CLI depth-upscale --input rgb_capture.tiff --sensor-depth sensor_depth.tiff --tiff calibrated_depth.tiff
